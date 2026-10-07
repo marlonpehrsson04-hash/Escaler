@@ -121,7 +121,7 @@ public partial class EscalerApp
     // A search provider can be rate limited for a moment, so the next one takes over rather than failing the person
     private static async Task<List<Ikon.AI.WebSearching.SearchResult>> SearchWithFallbackAsync(string query)
     {
-        AIException? last = null;
+        Exception? last = null;
 
         foreach (var model in new[] { WebSearcherModel.Google, WebSearcherModel.Bing, WebSearcherModel.Jina, WebSearcherModel.Spider })
         {
@@ -134,7 +134,8 @@ public partial class EscalerApp
                     return results;
                 }
             }
-            catch (AIException e)
+            // Locally a provider failure is an AIException; hosted, the same 429 arrives as a FunctionCallException
+            catch (Exception e) when (e is not OperationCanceledException)
             {
                 Log.Instance.Warning($"Web search with {model} failed, trying the next: {e.Message}");
                 last = e;
