@@ -8,11 +8,12 @@ public partial class EscalerApp
     {
         IEnumerable<Handoff> rows = _handoffs.Values;
 
+        // Problems can be personal (pay, health, a conflict), so only the people involved see one; admins see all
         rows = _handoffScope.Value switch
         {
-            "for" => rows.Where(h => h.AssigneeId == me.Id),
-            "from" => rows.Where(h => h.RequesterExpertId == me.Id || (me.SlackUserId is not null && h.RequesterSlackId == me.SlackUserId)),
-            _ => rows,
+            "from" => rows.Where(h => IsRequester(h, me)),
+            "all" when _isAdmin.Value => rows,
+            _ => rows.Where(h => h.AssigneeId == me.Id),
         };
 
         rows = _handoffStatus.Value switch
@@ -51,7 +52,7 @@ public partial class EscalerApp
         view.Column(["gap-1"], content: head =>
         {
             head.Text([Text.H2, "font-heading"], text: "Handoffs");
-            head.Text([Text.Body, "text-muted-foreground"], text: "Every request Escaler routed, in Slack and here.");
+            head.Text([Text.Body, "text-muted-foreground"], text: _isAdmin.Value ? "Every request Escaler routed, in Slack and here." : "Requests routed to you or by you, in Slack and here.");
         });
 
         view.Column(["gap-3 grid grid-cols-2 lg:grid-cols-4"], content: stats =>
@@ -68,7 +69,10 @@ public partial class EscalerApp
             {
                 Segment(seg, "for", "For me");
                 Segment(seg, "from", "From me");
-                Segment(seg, "all", "Everyone");
+                if (_isAdmin.Value)
+                {
+                    Segment(seg, "all", "Everyone");
+                }
             });
 
             bar.Select(["w-full sm:w-40"], triggerStyle: [Select.Size.Sm], ariaLabel: "Status", bind: _handoffStatus, options:
@@ -149,7 +153,7 @@ public partial class EscalerApp
     {
         var assignee = FindExpert(handoff.AssigneeId);
         var isAssignee = handoff.AssigneeId == me.Id;
-        var isRequester = handoff.RequesterExpertId == me.Id || (me.SlackUserId is not null && handoff.RequesterSlackId == me.SlackUserId);
+        var isRequester = IsRequester(handoff, me);
 
         view.Card([isAssignee && handoff.Status == HandoffStatus.Waiting ? Card.Elevated : Card.Default, "p-5 gap-3",
                 isAssignee && handoff.Status == HandoffStatus.Waiting ? "border-l-4 border-l-brand" : ""],
@@ -210,16 +214,36 @@ public partial class EscalerApp
 
                     if (handoff.Status == HandoffStatus.Accepted && (isAssignee || isRequester))
                     {
-                        actions.Button([Button.PrimaryMd, "gap-1.5"], text: "Mark done", onClick: async () => MarkDone(handoff.Id), content: b =>
+                        actions.Button([Button.PrimaryMd, "gap-1.5"], text: "Mark done", onClick: async () => MarkDone(handoff.Id, me), content: b =>
                         {
                             b.Icon([Icon.Sm], name: "check");
                             b.Text(text: "Mark done");
                         });
                     }
 
+                    // Demo colleagues can't answer for themselves, so the requester plays their part to try the flow
+                    if (isRequester && handoff.Status == HandoffStatus.Waiting && assignee is { IsDemo: true } demo)
+                    {
+                        var first = demo.Name.Split(' ')[0];
+                        actions.Button([Button.OutlineMd, "border-dashed"], text: $"Demo: {first} accepts", onClick: async () =>
+                        {
+                            if (FindExpert(demo.Id) is { IsDemo: true })
+                            {
+                                await AcceptAsync(handoff.Id, demo.Id);
+                            }
+                        });
+                        actions.Button([Button.OutlineMd, "border-dashed"], text: $"Demo: {first} passes", onClick: async () =>
+                        {
+                            if (FindExpert(demo.Id) is { IsDemo: true })
+                            {
+                                await DeclineAsync(handoff.Id, demo.Id);
+                            }
+                        });
+                    }
+
                     if (isRequester && handoff.IsOpen)
                     {
-                        actions.Button([Button.GhostMd], text: "Withdraw request", onClick: async () => Cancel(handoff.Id));
+                        actions.Button([Button.GhostMd], text: "Withdraw request", onClick: async () => Cancel(handoff.Id, me));
                     }
                 });
             });

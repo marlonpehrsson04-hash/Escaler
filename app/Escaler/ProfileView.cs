@@ -3,6 +3,11 @@ public partial class EscalerApp
     private static readonly string[] CommonTitles =
         ["Software Engineer", "Product Manager", "Product Designer", "Account Executive", "HR Partner", "Financial Controller", "Data Analyst", "Customer Success Manager"];
 
+    private const int MaxName = 80;
+    private const int MaxTitle = 80;
+    private const int MaxAbout = 300;
+    private const int MaxSkills = 20;
+
     private static readonly string[] CommonDepartments =
         ["Engineering", "Product", "Design", "Sales", "Marketing", "Customer Success", "Finance", "People & HR", "Legal", "Operations", "IT", "Data", "Leadership"];
 
@@ -27,7 +32,12 @@ public partial class EscalerApp
         _formTitle.Value = existing?.Title ?? "";
         _formDepartment.Value = existing?.Department ?? "";
         _formAbout.Value = existing?.About ?? "";
-        _formEmail.Value = existing?.Email ?? profile?.Email ?? "";
+        // Only ever the verified sign-in address: Slack accounts are linked by it, so a typed one could claim someone else's
+        if (profile?.Email is { Length: > 0 } verified)
+        {
+            _formEmail.Value = verified;
+        }
+
         _formAvailable.Value = existing?.Available ?? true;
         _formSkills.ReplaceAll(existing?.Skills ?? []);
         _skillIdeas.Clear();
@@ -105,6 +115,48 @@ public partial class EscalerApp
         });
 
         view.Card([Card.Elevated, "p-6 md:p-8 gap-6 max-w-2xl"], content: card => RenderProfileForm(card, isNew: false));
+
+        view.Card([Card.Flat, "p-6 gap-4 max-w-2xl border border-border"], content: card =>
+        {
+            card.Column(["gap-1"], content: text =>
+            {
+                text.Text(["font-semibold"], text: "Leave the directory");
+                text.Text([Text.Caption, "text-muted-foreground leading-relaxed"],
+                    text: "Deletes your profile so Escaler stops routing requests to you. Anything waiting on you passes to the next best person. Requests you made stay with the people helping you.");
+            });
+
+            card.AlertDialog(
+                title: "Delete your profile?",
+                description: "Your title, skills and Slack link are removed and open requests move on to someone else. You can join again later, but this can't be undone.",
+                cancelLabel: "Keep my profile",
+                actionLabel: "Delete my profile",
+                actionStyle: [Button.ErrorMd],
+                onAction: LeaveDirectoryAsync,
+                trigger: t => t.Button([Button.OutlineErrorMd, "self-start"], text: "Delete my profile"));
+        });
+    }
+
+    private async Task LeaveDirectoryAsync()
+    {
+        if (ReactiveScope.UserIdOrNull is not { Length: > 0 } userId || FindExpert(userId) is null)
+        {
+            return;
+        }
+
+        // Pass on what was waiting on this person before the profile goes, so nothing is stranded
+        foreach (var handoff in _handoffs.Values.Where(h => h.Status == HandoffStatus.Waiting && h.AssigneeId == userId).ToList())
+        {
+            await DeclineAsync(handoff.Id, userId);
+        }
+
+        foreach (var handoff in _handoffs.Values.Where(h => h.Status == HandoffStatus.Accepted && h.AssigneeId == userId).ToList())
+        {
+            Save(handoff.Id, h => h with { Status = HandoffStatus.Unassigned });
+        }
+
+        _experts.Remove(userId);
+        _formLoaded.Value = false;
+        _tab.Value = "ask";
     }
 
     private void RenderProfileForm(UIView view, bool isNew)
@@ -129,6 +181,23 @@ public partial class EscalerApp
         if (_formSkills.Count == 0)
         {
             missing.Add("at least one skill");
+        }
+
+        var tooLong = new List<string>();
+
+        if (_formName.Value.Trim().Length > MaxName)
+        {
+            tooLong.Add($"name ({MaxName} characters)");
+        }
+
+        if (_formTitle.Value.Trim().Length > MaxTitle)
+        {
+            tooLong.Add($"title ({MaxTitle} characters)");
+        }
+
+        if (_formAbout.Value.Trim().Length > MaxAbout)
+        {
+            tooLong.Add($"\"Ask me about\" ({MaxAbout} characters)");
         }
 
         view.Column(["gap-5"], content: form =>
@@ -163,8 +232,17 @@ public partial class EscalerApp
 
             form.TextArea(["default"], label: "Ask me about…", placeholder: "Billing code, refunds and anything that touches the database.", rows: 2, autoResize: true, maxRows: 5, bind: _formAbout);
 
-            form.TextField(["default"], label: "Work email", placeholder: "you@company.com", type: "email", bind: _formEmail);
-            form.Text([Text.Caption, "text-muted-foreground -mt-3"], text: "Escaler finds your Slack account with this, so use the email you sign in to Slack with.");
+            form.Column(["gap-1.5"], content: email =>
+            {
+                email.Text([Text.Label], text: "Work email");
+                email.Row(["items-center gap-2 rounded-lg border border-border bg-foreground/5 px-3 h-10"], content: row =>
+                {
+                    row.Icon([Icon.Sm, "text-muted-foreground"], name: "lock");
+                    row.Text(["text-sm truncate"], text: _formEmail.Value.Length > 0 ? _formEmail.Value : "No email on your sign-in");
+                });
+                email.Text([Text.Caption, "text-muted-foreground"],
+                    text: "From your sign-in, so nobody can claim someone else's Slack account. Sign in with the email you use for Slack.");
+            });
 
             form.Row(["items-center justify-between gap-4 rounded-lg border border-border px-4 py-3"], content: row =>
             {
@@ -185,12 +263,16 @@ public partial class EscalerApp
             {
                 actions.Button([Button.PrimaryLg, "w-full"],
                     text: _saving.Value ? "Saving…" : isNew ? "Join the directory" : "Save profile",
-                    disabled: missing.Count > 0 || _saving.Value,
+                    disabled: missing.Count > 0 || tooLong.Count > 0 || _saving.Value,
                     onClick: SaveProfileAsync);
 
                 if (missing.Count > 0)
                 {
                     actions.Text([Text.Caption, "text-muted-foreground text-center"], text: $"Add {string.Join(", ", missing)} to continue.");
+                }
+                else if (tooLong.Count > 0)
+                {
+                    actions.Text([Text.Caption, "text-error-700 text-center"], text: $"Shorten your {string.Join(", ", tooLong)}.");
                 }
             });
         });
@@ -235,7 +317,7 @@ public partial class EscalerApp
                         chips.Button(["inline-flex items-center gap-1 h-8 px-3 rounded-full border border-dashed border-brand text-xs font-medium bg-transparent hover:bg-brand-solid/10 transition-colors"],
                             text: $"Add {idea}",
                             key: $"idea-{idea}",
-                            onClick: async () => _formSkills.Add(idea),
+                            onClick: async () => AddSkills(idea),
                             content: chip =>
                             {
                                 chip.Icon([Icon.Sm], name: "plus");
@@ -279,7 +361,7 @@ public partial class EscalerApp
         {
             var skill = raw.Length > 40 ? raw[..40] : raw;
 
-            if (!_formSkills.Contains(skill, StringComparer.OrdinalIgnoreCase))
+            if (_formSkills.Count < MaxSkills && !_formSkills.Contains(skill, StringComparer.OrdinalIgnoreCase))
             {
                 _formSkills.Add(skill);
             }
@@ -314,7 +396,9 @@ public partial class EscalerApp
 
     private async Task SaveProfileAsync()
     {
-        if (_saving.Value || ReactiveScope.UserIdOrNull is not { Length: > 0 } userId)
+        if (_saving.Value || ReactiveScope.UserIdOrNull is not { Length: > 0 } userId
+            || _formName.Value.Trim().Length is 0 or > MaxName || _formTitle.Value.Trim().Length is 0 or > MaxTitle
+            || _formAbout.Value.Trim().Length > MaxAbout || _formDepartment.Value.Length == 0 || _formSkills.Count == 0)
         {
             return;
         }
@@ -322,22 +406,31 @@ public partial class EscalerApp
         using var _ = _saving.AsToken();
 
         var existing = FindExpert(userId);
-        var email = _formEmail.Value.Trim();
+
+        // The verified sign-in address, read fresh from the platform rather than from anything the browser sent
+        var email = (await TryGetProfileAsync(userId))?.Email?.Trim() ?? "";
         var slackUserId = existing?.Email == email ? existing.SlackUserId : null;
         string? slackProblem = null;
 
-        if (SlackReady && (slackUserId is null || existing?.Email != email))
+        if (SlackReady && slackUserId is null)
         {
             (slackUserId, slackProblem) = await LookupSlackByEmailAsync(email);
         }
 
+        // One Slack account belongs to one profile
+        if (slackUserId is not null && _experts.Values.Any(e => e.Id != userId && e.SlackUserId == slackUserId))
+        {
+            slackUserId = null;
+            slackProblem = "That Slack account is already linked to another profile. Ask an admin to check it.";
+        }
+
         _experts[userId] = new Expert(
             Id: userId,
-            Name: _formName.Value.Trim(),
-            Title: _formTitle.Value.Trim(),
-            Department: _formDepartment.Value,
-            Skills: [.. _formSkills],
-            About: _formAbout.Value.Trim(),
+            Name: Clip(_formName.Value, MaxName),
+            Title: Clip(_formTitle.Value, MaxTitle),
+            Department: Clip(_formDepartment.Value, 40),
+            Skills: [.. _formSkills.Take(MaxSkills)],
+            About: Clip(_formAbout.Value, MaxAbout),
             Email: email.Length > 0 ? email : null,
             SlackUserId: slackUserId,
             Available: _formAvailable.Value,
@@ -352,5 +445,11 @@ public partial class EscalerApp
         {
             _tab.Value = "ask";
         }
+    }
+
+    private static string Clip(string text, int max)
+    {
+        var trimmed = text.Trim();
+        return trimmed.Length <= max ? trimmed : trimmed[..max];
     }
 }

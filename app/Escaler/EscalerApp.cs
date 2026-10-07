@@ -42,6 +42,9 @@ public partial class EscalerApp(IApp<SessionIdentity, ClientParameters> app)
 
     private readonly ClientReactive<string> _tab = new("ask");
 
+    // Set from the platform profile at join; only admins may read every handoff
+    private readonly UserReactive<bool> _isAdmin = new(false);
+
     public async Task Main()
     {
         app.OnStarting(async () =>
@@ -64,10 +67,19 @@ public partial class EscalerApp(IApp<SessionIdentity, ClientParameters> app)
             }
 
             // Prefill the profile form from the sign-in profile, so onboarding starts half done
-            var profile = await Profiles.GetProfileAsync(ctx);
+            var profile = await TryGetProfileAsync(ctx.UserId);
+
+            // Profiles saved before emails came from sign-in may carry a typed one; trust only the verified address
+            if (FindExpert(ctx.UserId) is { } existing && profile?.Email is { Length: > 0 } verified
+                && !string.Equals(existing.Email, verified, StringComparison.OrdinalIgnoreCase))
+            {
+                _experts[existing.Id] = existing with { Email = verified, SlackUserId = null };
+            }
 
             using (ReactiveScope.Use(new UserScope(ctx.UserId)))
             {
+                _isAdmin.Value = profile?.HasRole(UserRole.Admin) ?? false;
+
                 if (!_formLoaded.Value)
                 {
                     FillForm(FindExpert(ctx.UserId), profile);
@@ -115,6 +127,20 @@ public partial class EscalerApp(IApp<SessionIdentity, ClientParameters> app)
                 });
             });
         });
+    }
+
+    // The lookup throws when the backend is unreachable or the id is not a platform account; treat that as "no verified profile"
+    private async Task<ClientProfile?> TryGetProfileAsync(string userId)
+    {
+        try
+        {
+            return await Profiles.GetProfileAsync(userId);
+        }
+        catch (Exception e)
+        {
+            Log.Instance.Warning($"Profile lookup failed for {userId}: {e.GetType().Name}: {e.Message}");
+            return null;
+        }
     }
 
     private Expert? Me() => ReactiveScope.UserIdOrNull is { Length: > 0 } id ? FindExpert(id) : null;

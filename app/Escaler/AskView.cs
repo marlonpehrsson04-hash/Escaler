@@ -36,13 +36,17 @@ public partial class EscalerApp
 
             card.Row(["items-center justify-between gap-3 px-2 pb-1 pt-2 flex-wrap"], content: row =>
             {
-                row.Text([Text.Caption, "text-muted-foreground px-2"], text: _askDraft.Value.Trim().Length == 0
+                var length = _askDraft.Value.Trim().Length;
+
+                row.Text([Text.Caption, length > MaxProblem ? "text-error-700 px-2" : "text-muted-foreground px-2"], text: length == 0
                     ? "Describe the problem to find someone"
-                    : $"Routing across {_experts.Values.Count(e => e.Available && e.Id != me.Id)} available people");
+                    : length > MaxProblem
+                        ? $"Too long: {length:N0} of {MaxProblem:N0} characters. Sum it up a bit."
+                        : $"Routing across {_experts.Values.Count(e => e.Available && e.Id != me.Id)} available people");
 
                 row.Button([Button.PrimaryMd, "gap-2"],
                     text: "Find the right person",
-                    disabled: _routing.Value || _askDraft.Value.Trim().Length == 0,
+                    disabled: _routing.Value || _askDraft.Value.Trim().Length is 0 or > MaxProblem,
                     onClick: async () => await FindPersonAsync(me),
                     content: b =>
                     {
@@ -112,7 +116,7 @@ public partial class EscalerApp
     {
         var problem = _askDraft.Value.Trim();
 
-        if (_routing.Value || problem.Length == 0)
+        if (_routing.Value || problem.Length is 0 or > MaxProblem)
         {
             return;
         }

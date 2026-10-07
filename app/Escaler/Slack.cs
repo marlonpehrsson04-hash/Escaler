@@ -18,6 +18,8 @@ public partial class EscalerApp
     private readonly Reactive<string?> _slackWorkspace = new(null);
     private readonly Reactive<string?> _slackError = new(null);
 
+    private bool HasSigningSecret => app.Secrets.TryGet("SLACK_SIGNING_SECRET", out var secret) && !string.IsNullOrWhiteSpace(secret);
+
     private string? SlackToken => app.Secrets.TryGet("SLACK_BOT_TOKEN", out var token) && !string.IsNullOrWhiteSpace(token) ? token : null;
 
     private bool SlackReady => SlackToken is not null;
@@ -42,7 +44,8 @@ public partial class EscalerApp
         }
 
         // Echoing the challenge reveals nothing, and answering it before the secrets are set lets setup run in any order
-        if (Str(root, "type") == "url_verification")
+        // Once a signing secret exists, even the handshake has to be signed
+        if (Str(root, "type") == "url_verification" && (!HasSigningSecret || VerifySlack(req)))
         {
             return HttpResult.Json(new { challenge = Str(root, "challenge") });
         }
@@ -50,6 +53,12 @@ public partial class EscalerApp
         if (!VerifySlack(req))
         {
             return HttpResult.Unauthorized();
+        }
+
+        // Slack only retries for minutes, so an occasional reset keeps this from growing without bound
+        if (_seenEvents.Count > 10_000)
+        {
+            _seenEvents.Clear();
         }
 
         if (Str(root, "type") != "event_callback" || Str(root, "event_id") is not { } eventId || !_seenEvents.TryAdd(eventId, 0))
@@ -101,10 +110,19 @@ public partial class EscalerApp
             return HttpResult.BadRequest();
         }
 
-        var payload = JsonDocument.Parse(WebUtility.UrlDecode(field[1])).RootElement.Clone();
+        JsonElement payload;
+
+        try
+        {
+            payload = JsonDocument.Parse(WebUtility.UrlDecode(field[1])).RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            return HttpResult.BadRequest();
+        }
 
         if (Str(payload, "type") != "block_actions"
-            || !payload.TryGetProperty("actions", out var actions) || actions.GetArrayLength() == 0
+            || !payload.TryGetProperty("actions", out var actions) || actions.ValueKind != JsonValueKind.Array || actions.GetArrayLength() == 0
             || !payload.TryGetProperty("user", out var user) || Str(user, "id") is not { } slackUserId)
         {
             return HttpResult.Ok();
@@ -113,7 +131,11 @@ public partial class EscalerApp
         var action = actions[0];
         var actionId = Str(action, "action_id") ?? "";
         var handoffId = Str(action, "value") ?? "";
-        var responseUrl = Str(payload, "response_url");
+        // Only ever call back to Slack's own hooks host, whatever the payload says
+        var responseUrl = Str(payload, "response_url") is { } url
+            && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps && uri.Host == "hooks.slack.com"
+            ? url
+            : null;
 
         _ = Task.Run(() => HandleSlackActionAsync(actionId, handoffId, slackUserId, responseUrl));
         return HttpResult.Ok();
@@ -126,6 +148,12 @@ public partial class EscalerApp
             // Mentions arrive as <@U123>; the model only needs the words
             text = Regex.Replace(text, @"<@[A-Z0-9]+>", "").Trim();
 
+            if (text.Length > MaxProblem)
+            {
+                await SlackPostAsync(channel, $"That's a lot to route. Can you sum it up in under {MaxProblem:N0} characters?", threadTs: threadTs);
+                return;
+            }
+
             if (text.Length == 0)
             {
                 await SlackPostAsync(channel, "Hi! Tell me what you're stuck on and I'll find the colleague who knows it best.", threadTs: threadTs);
@@ -137,7 +165,7 @@ public partial class EscalerApp
 
             if (_pendingClarify.TryRemove(slackUserId, out var pending) && pending.At > DateTime.UtcNow.AddMinutes(-15))
             {
-                text = $"{pending.Text}\n{text}";
+                text = Truncate($"{pending.Text}\n{text}", MaxProblem);
             }
 
             var candidates = _experts.Values
@@ -168,8 +196,13 @@ public partial class EscalerApp
 
             if (plan.NeedsClarification)
             {
+                foreach (var stale in _pendingClarify.Where(p => p.Value.At < DateTime.UtcNow.AddMinutes(-15)).Select(p => p.Key).ToList())
+                {
+                    _pendingClarify.TryRemove(stale, out _);
+                }
+
                 _pendingClarify[slackUserId] = new PendingClarification(text, DateTime.UtcNow);
-                await SlackPostAsync(channel, plan.ClarifyingQuestion.Length > 0 ? plan.ClarifyingQuestion : "Can you tell me a bit more about what you need?", threadTs: threadTs);
+                await SlackPostAsync(channel, plan.ClarifyingQuestion.Length > 0 ? Esc(plan.ClarifyingQuestion) : "Can you tell me a bit more about what you need?", threadTs: threadTs);
                 return;
             }
 
@@ -276,7 +309,7 @@ public partial class EscalerApp
             },
         ];
 
-        await SlackPostAsync(slackId, $"{handoff.RequesterName} needs a hand: {handoff.Summary}", blocks);
+        await SlackPostAsync(slackId, $"{Esc(handoff.RequesterName)} needs a hand: {Esc(handoff.Summary)}", blocks);
     }
 
     // After an accept: one group DM with both people, the problem and a Done button
@@ -306,7 +339,7 @@ public partial class EscalerApp
                     },
                 ];
 
-                await SlackPostAsync(channelId, $"Connected you with {expert.Name} about {handoff.Summary}", blocks);
+                await SlackPostAsync(channelId, $"Connected you with {Esc(expert.Name)} about {Esc(handoff.Summary)}", blocks);
                 return;
             }
         }
@@ -314,13 +347,13 @@ public partial class EscalerApp
         // One side isn't on Slack: tell whoever is how to reach the other
         if (handoff.RequesterSlackId is not null)
         {
-            var contact = expert.Email is { Length: > 0 } email ? $" Reach them at {email}." : "";
+            var contact = expert.Email is { Length: > 0 } email ? $" Reach them at {Esc(email)}." : "";
             await SlackTellRequesterAsync(handoff, $":white_check_mark: *{Esc(expert.Name)}* accepted *{Esc(handoff.Summary)}*.{contact}");
         }
 
         if (expert.SlackUserId is { } slackId)
         {
-            var contact = requester?.Email is { Length: > 0 } email ? $" at {email}" : "";
+            var contact = requester?.Email is { Length: > 0 } email ? $" at {Esc(email)}" : "";
             await SlackPostAsync(slackId, $"Thanks for taking *{Esc(handoff.Summary)}*. {Esc(handoff.RequesterName)} isn't on Slack. Reach them{contact}.");
         }
     }
@@ -509,7 +542,7 @@ public partial class EscalerApp
     {
         var manifest = new
         {
-            display_information = new { name = "Escaler", description = "Tell it what's blocking you. It finds the colleague who knows.", background_color = "#171512" },
+            display_information = new { name = "Escaler", description = "Tell it what is blocking you. It finds the colleague who knows.", background_color = "#171512" },
             features = new
             {
                 app_home = new { home_tab_enabled = false, messages_tab_enabled = true, messages_tab_read_only_enabled = false },
