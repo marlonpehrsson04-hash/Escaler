@@ -143,7 +143,8 @@ public partial class EscalerApp(IApp<SessionIdentity, ClientParameters> app)
     {
         try
         {
-            return await Profiles.GetProfileAsync(userId);
+            // A slow backend must not hold up someone joining or saving
+            return await Profiles.GetProfileAsync(userId).WaitAsync(TimeSpan.FromSeconds(5));
         }
         catch (Exception e)
         {
