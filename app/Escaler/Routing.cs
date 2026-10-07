@@ -202,19 +202,4 @@ public partial class EscalerApp
         Save(id, h => h with { Status = HandoffStatus.Cancelled });
         return true;
     }
-
-    private static readonly Expert[] DemoExperts =
-    [
-        Demo("demo-1", "Sofia Lindqvist", "Senior Backend Engineer", "Engineering", ["Payments API", "Stripe", "PostgreSQL", "Webhooks", "On-call"], "Ask me about billing code, refunds and anything that touches the database."),
-        Demo("demo-2", "Jonas Berg", "Head of People", "People & HR", ["Parental leave", "Onboarding", "Contracts", "Benefits", "Recruiting"], "Policies, contracts and the awkward conversations."),
-        Demo("demo-3", "Amira Haddad", "Product Designer", "Design", ["Figma", "Design system", "User research", "Accessibility"], "Happy to review flows, components and anything that needs to look right."),
-        Demo("demo-4", "Mikael Nyström", "Financial Controller", "Finance", ["Invoicing", "Expense reports", "Budgeting", "VAT", "Fortnox"], "Invoices, budgets and how to get an expense approved."),
-        Demo("demo-5", "Elin Svensson", "Account Executive", "Sales", ["Enterprise deals", "Pricing", "HubSpot", "RFPs", "Negotiation"], "Pricing questions, deal desk and customer contracts."),
-        Demo("demo-6", "David Okafor", "IT & Security Lead", "IT", ["SSO", "Laptops", "Google Workspace", "GDPR", "Security reviews"], "Access, devices, security questionnaires and data protection."),
-        Demo("demo-7", "Hanna Virtanen", "Customer Success Manager", "Customer Success", ["Renewals", "Onboarding customers", "Zendesk", "Escalations"], "When a customer is unhappy or needs a hand getting started."),
-        Demo("demo-8", "Lucas Moreau", "Data Analyst", "Data", ["SQL", "Looker", "Dashboards", "Forecasting", "Python"], "Numbers, dashboards and 'can we measure this?'"),
-    ];
-
-    private static Expert Demo(string id, string name, string title, string department, string[] skills, string about) =>
-        new(id, name, title, department, skills, about, null, null, true, true, DateTime.UtcNow);
 }

@@ -5,8 +5,6 @@ public partial class EscalerApp
     private readonly ClientReactive<string> _peopleAvailability = new("all");
     private readonly ClientReactive<string> _peopleSort = new("name");
 
-    // Demo people removed in one go, kept so Undo can put them back
-    private readonly Reactive<Expert[]?> _removedDemo = new(null);
 
     private IReadOnlyList<Expert> VisiblePeople()
     {
@@ -44,7 +42,7 @@ public partial class EscalerApp
     private void RenderPeople(UIView view, Expert me)
     {
         var all = _experts.Values.Where(e => !e.IsExternal).ToList();
-        var demoCount = all.Count(e => e.IsDemo);
+        var demoCount = DemoCount();
 
         view.Row(["items-end justify-between gap-4 flex-wrap"], content: head =>
         {
@@ -54,37 +52,32 @@ public partial class EscalerApp
                 title.Text([Text.Body, "text-muted-foreground"], text: $"{all.Count} in the directory · {all.Count(e => e.Available)} taking requests");
             });
 
-            if (demoCount > 0)
+            if (demoCount > 0 && _isAdmin.Value)
             {
-                head.Button([Button.GhostSm, "gap-1.5"], text: $"Remove {demoCount} demo people", onClick: async () =>
+                head.Button([Button.GhostSm, "gap-1.5"], text: "Remove demo data", onClick: async () =>
                 {
-                    var demos = _experts.Values.Where(e => e.IsDemo).ToArray();
-
-                    foreach (var demo in demos)
+                    if (_isAdmin.Value)
                     {
-                        _experts.Remove(demo.Id);
+                        RemoveDemoData();
                     }
-
-                    _removedDemo.Value = demos;
                 }, content: b =>
                 {
                     b.Icon([Icon.Sm], name: "user-x");
-                    b.Text(text: $"Remove {demoCount} demo people");
+                    b.Text(text: "Remove demo data");
                 });
             }
         });
 
-        if (_removedDemo.Value is { Length: > 0 } removed)
+        if (_removedDemo.Value is { } removed && _isAdmin.Value)
         {
-            view.Alert($"Removed {removed.Length} demo people", tone: SemanticTone.Neutral, onDismiss: async () => _removedDemo.Value = null, content: alert =>
+            view.Alert($"Removed the demo company: {removed.Experts.Length} people and partners, {removed.Handoffs.Length} requests, {removed.Priorities.Length} priorities",
+                tone: SemanticTone.Neutral, onDismiss: async () => _removedDemo.Value = null, content: alert =>
                 alert.Button([Button.OutlineSm, "mt-3 self-start"], text: "Undo", onClick: async () =>
                 {
-                    foreach (var demo in removed)
+                    if (_isAdmin.Value)
                     {
-                        _experts[demo.Id] = demo;
+                        RestoreDemoData();
                     }
-
-                    _removedDemo.Value = null;
                 }));
         }
 

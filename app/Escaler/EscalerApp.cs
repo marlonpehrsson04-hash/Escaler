@@ -49,14 +49,8 @@ public partial class EscalerApp(IApp<SessionIdentity, ClientParameters> app)
     {
         app.OnStarting(async () =>
         {
-            // An empty directory routes nowhere; example colleagues show how it works until real people join
-            if (_experts.Count == 0)
-            {
-                foreach (var demo in DemoExperts)
-                {
-                    _experts[demo.Id] = demo;
-                }
-            }
+            // An empty directory routes nowhere; an example company shows how it works until real people join
+            SeedDemoData();
         });
 
         app.OnClientJoined(async ctx =>
