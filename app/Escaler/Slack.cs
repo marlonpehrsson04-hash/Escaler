@@ -20,7 +20,11 @@ public partial class EscalerApp
 
     private bool HasSigningSecret => app.Secrets.TryGet("SLACK_SIGNING_SECRET", out var secret) && !string.IsNullOrWhiteSpace(secret);
 
-    private string? SlackToken => app.Secrets.TryGet("SLACK_BOT_TOKEN", out var token) && !string.IsNullOrWhiteSpace(token) ? token : null;
+    // Trimmed, because a token pasted with a trailing space or newline is rejected as invalid_auth
+    private string? SlackToken => app.Secrets.TryGet("SLACK_BOT_TOKEN", out var token) && !string.IsNullOrWhiteSpace(token) ? token.Trim() : null;
+
+    // The error code of the last failed Slack call, for explaining a failed connection check
+    private string? _lastSlackError;
 
     private bool SlackReady => SlackToken is not null;
 
@@ -441,6 +445,21 @@ public partial class EscalerApp
             return;
         }
 
+        var token = SlackToken!;
+
+        // Catch the common mix-ups before asking Slack; only the prefix is ever shown, never the token
+        if (!token.StartsWith("xoxb-", StringComparison.Ordinal))
+        {
+            _slackWorkspace.Value = null;
+            _slackError.Value = token[..Math.Min(5, token.Length)] switch
+            {
+                "xoxp-" => "SLACK_BOT_TOKEN holds a user token (xoxp-). Use the Bot User OAuth Token (xoxb-) from OAuth & Permissions.",
+                "xapp-" => "SLACK_BOT_TOKEN holds an app-level token (xapp-). Use the Bot User OAuth Token (xoxb-) from OAuth & Permissions.",
+                _ => "SLACK_BOT_TOKEN doesn't start with xoxb-, so it isn't a bot token. It may be the Signing Secret or Client Secret. Copy the Bot User OAuth Token from OAuth & Permissions.",
+            };
+            return;
+        }
+
         var auth = await SlackCallAsync("auth.test", new());
 
         if (auth is { } ok)
@@ -451,7 +470,15 @@ public partial class EscalerApp
         else
         {
             _slackWorkspace.Value = null;
-            _slackError.Value = "Slack rejected the bot token. Check SLACK_BOT_TOKEN and that the app is installed to your workspace.";
+            _slackError.Value = _lastSlackError switch
+            {
+                "invalid_auth" or "not_authed" =>
+                    "Slack doesn't recognise SLACK_BOT_TOKEN. Copy the Bot User OAuth Token again from OAuth & Permissions; reinstalling the app gives it a new one.",
+                "token_revoked" or "account_inactive" or "app_uninstalled" or "token_expired" =>
+                    "This token was revoked or the app was uninstalled. Reinstall the app to your workspace and store the new Bot User OAuth Token.",
+                null => "Couldn't reach Slack just now. Press Check again in a moment.",
+                var code => $"Slack refused the connection ({code}). Check SLACK_BOT_TOKEN and that the app is installed to your workspace.",
+            };
         }
     }
 
@@ -480,6 +507,8 @@ public partial class EscalerApp
             return null;
         }
 
+        _lastSlackError = null;
+
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, $"https://slack.com/api/{method}") { Content = new FormUrlEncodedContent(args) };
@@ -493,7 +522,8 @@ public partial class EscalerApp
                 return root;
             }
 
-            Log.Instance.Warning($"Slack {method} failed: {Str(root, "error") ?? response.StatusCode.ToString()}");
+            _lastSlackError = Str(root, "error") ?? response.StatusCode.ToString();
+            Log.Instance.Warning($"Slack {method} failed: {_lastSlackError}");
             return null;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException)
@@ -532,7 +562,7 @@ public partial class EscalerApp
             return false;
         }
 
-        var hash = HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes($"v0:{timestamp}:{req.Body}"));
+        var hash = HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret.Trim()), Encoding.UTF8.GetBytes($"v0:{timestamp}:{req.Body}"));
         var expected = "v0=" + Convert.ToHexStringLower(hash);
 
         return CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(signature));
