@@ -26,7 +26,7 @@ public partial class EscalerApp
                     {
                         text.Text(["font-semibold"], text: connected ? $"Connected to {_slackWorkspace.Value}" : SlackReady ? "Token set, but Slack didn't accept it" : "Not connected yet");
                         text.Text([Text.Caption, "text-muted-foreground"], text: connected
-                            ? $"{_experts.Values.Count(e => e.SlackUserId is not null)} of {_experts.Values.Count(e => !e.IsDemo)} people linked to Slack"
+                            ? $"{_experts.Values.Count(e => e.SlackUserId is not null)} of {_experts.Values.Count(e => !e.IsDemo && !e.IsExternal)} people linked to Slack"
                             : "Escaler works on the web until then.");
                     });
                 });
@@ -55,6 +55,8 @@ public partial class EscalerApp
                 card.Alert("Slack rejected the connection", tone: SemanticTone.Error, description: error);
             }
         });
+
+        RenderImportCard(view);
 
         var manifest = SlackManifest();
 

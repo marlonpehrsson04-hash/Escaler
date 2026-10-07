@@ -42,7 +42,7 @@ public partial class EscalerApp(IApp<SessionIdentity, ClientParameters> app)
 
     private readonly ClientReactive<string> _tab = new("ask");
 
-    // Set from the platform profile at join; only admins may read every handoff
+    // Set at join from the platform Admin role or the ESCALER_ADMIN_EMAILS secret; admins read every handoff, import from Slack and manage partners
     private readonly UserReactive<bool> _isAdmin = new(false);
 
     public async Task Main()
@@ -76,9 +76,15 @@ public partial class EscalerApp(IApp<SessionIdentity, ClientParameters> app)
                 _experts[existing.Id] = existing with { Email = verified, SlackUserId = null };
             }
 
+            // A draft imported from Slack for this email becomes this person's profile
+            if (profile?.Email is { Length: > 0 } signInEmail)
+            {
+                ClaimImportedDraft(ctx.UserId, signInEmail);
+            }
+
             using (ReactiveScope.Use(new UserScope(ctx.UserId)))
             {
-                _isAdmin.Value = profile?.HasRole(UserRole.Admin) ?? false;
+                _isAdmin.Value = (profile?.HasRole(UserRole.Admin) ?? false) || IsAdminEmail(profile?.Email);
 
                 if (!_formLoaded.Value)
                 {
@@ -115,6 +121,9 @@ public partial class EscalerApp(IApp<SessionIdentity, ClientParameters> app)
                                 break;
                             case "slack":
                                 RenderSlackSetup(body);
+                                break;
+                            case "priorities":
+                                RenderPriorities(body, me);
                                 break;
                             case "profile":
                                 RenderProfilePage(body);
@@ -164,6 +173,7 @@ public partial class EscalerApp(IApp<SessionIdentity, ClientParameters> app)
             bar.Row(["gap-1 items-center overflow-x-auto"], content: nav =>
             {
                 NavItem(nav, "ask", "Ask", "message-circle-question");
+                NavItem(nav, "priorities", "Priorities", "flag", UnseenPriorities(me));
                 NavItem(nav, "people", "People", "users");
                 NavItem(nav, "handoffs", "Handoffs", "arrow-right-left", waiting);
                 NavItem(nav, "slack", "Slack", "slack");

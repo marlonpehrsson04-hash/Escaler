@@ -14,6 +14,13 @@ public partial class EscalerApp
     private readonly UserReactive<string?> _sentHandoffId = new(null);
     private readonly UserReactive<bool> _sending = new(false);
 
+    // "Auto" keeps the AI's urgency guess; anything else is the requester's call
+    private readonly UserReactive<string> _askPriority = new("Auto");
+
+    private static readonly string[] RequestPriorities = ["Auto", "Low", "Normal", "High"];
+
+    private string EffectiveUrgency(string aiUrgency) => _askPriority.Value is "Low" or "Normal" or "High" ? _askPriority.Value : aiUrgency;
+
     private void RenderAsk(UIView view, Expert me)
     {
         view.Column(["gap-3 motion-[0:opacity-0_translate-y-[8px],100:opacity-100_translate-y-0] motion-duration-400ms"], content: hero =>
@@ -23,6 +30,17 @@ public partial class EscalerApp
             hero.Text([Text.BodyLg, "text-muted-foreground max-w-2xl"],
                 text: "Describe it like you'd tell a colleague. Escaler finds who in the company knows it best and has room for it. Same as DMing @Escaler in Slack.");
         });
+
+        RenderPinnedPriorities(view, me);
+
+        if (me.IsDraft)
+        {
+            view.Alert("Your profile was set up from Slack", tone: SemanticTone.Info,
+                description: me.Skills.Length > 0
+                    ? $"Escaler guessed your skills from your title ({string.Join(", ", me.Skills)}). Check them so the right requests reach you."
+                    : "Add what people can ask you about, so the right requests reach you.",
+                content: alert => alert.Button([Button.OutlineSm, "mt-3 self-start"], text: "Check my profile", onClick: async () => OpenProfileEditor(me)));
+        }
 
         view.Card([Card.Elevated, "p-2 gap-0"], content: card =>
         {
@@ -34,6 +52,27 @@ public partial class EscalerApp
                 ariaLabel: "Describe your problem",
                 bind: _askDraft);
 
+            card.Row(["items-center gap-2 px-3 pt-1 flex-wrap"], content: prio =>
+            {
+                prio.Text([Text.Caption, "text-muted-foreground"], text: "Priority");
+                prio.Row(["p-0.5 rounded-full bg-foreground/5 gap-0.5"], content: seg =>
+                {
+                    foreach (var option in RequestPriorities)
+                    {
+                        seg.Button(["h-8 px-3 rounded-full text-xs font-medium transition-colors",
+                                _askPriority.Value == option ? "bg-card text-foreground shadow-xs" : "bg-transparent text-muted-foreground hover:text-foreground"],
+                            text: option == "Auto" ? "Auto" : option,
+                            key: $"prio-{option}",
+                            onClick: async () => _askPriority.Value = option);
+                    }
+                });
+
+                if (_askPriority.Value == "Auto")
+                {
+                    prio.Text([Text.Caption, "text-muted-foreground hidden sm:block"], text: "Escaler judges urgency from your words");
+                }
+            });
+
             card.Row(["items-center justify-between gap-3 px-2 pb-1 pt-2 flex-wrap"], content: row =>
             {
                 var length = _askDraft.Value.Trim().Length;
@@ -42,7 +81,7 @@ public partial class EscalerApp
                     ? "Describe the problem to find someone"
                     : length > MaxProblem
                         ? $"Too long: {length:N0} of {MaxProblem:N0} characters. Sum it up a bit."
-                        : $"Routing across {_experts.Values.Count(e => e.Available && e.Id != me.Id)} available people");
+                        : $"Routing across {_experts.Values.Count(e => e.IsRoutable && e.Id != me.Id)} available people");
 
                 row.Button([Button.PrimaryMd, "gap-2"],
                     text: "Find the right person",
@@ -125,18 +164,25 @@ public partial class EscalerApp
         _askFailed.Value = false;
         _sentHandoffId.Value = null;
         _preview.Value = null;
+        _outside.Value = null;
+        _webFailed.Value = false;
 
-        var candidates = _experts.Values.Where(e => e.Available && e.Id != me.Id).ToList();
-
-        if (candidates.Count == 0)
-        {
-            _preview.Value = new RoutePreview(problem, new RoutePlan("", "Normal", false, "", []));
-            return;
-        }
+        var candidates = _experts.Values.Where(e => e.IsRoutable && e.Id != me.Id).ToList();
 
         try
         {
-            _preview.Value = new RoutePreview(problem, await PlanRouteAsync(problem, candidates));
+            var plan = candidates.Count > 0
+                ? await PlanRouteAsync(problem, candidates)
+                : new RoutePlan(Truncate(OneLine(problem), 90), "Normal", false, "", []);
+
+            // Outside options are worked out up front for a weak match, so they appear together with the colleagues
+            if (NeedsOutsideHelp(plan))
+            {
+                var summary = plan.Summary.Length > 0 ? plan.Summary : Truncate(OneLine(problem), 90);
+                _outside.Value = new OutsideHelp(problem, summary, await MatchPartnersAsync(problem), [], false);
+            }
+
+            _preview.Value = new RoutePreview(problem, plan);
         }
         catch (Exception e)
         {
@@ -154,7 +200,9 @@ public partial class EscalerApp
 
         using var _ = _sending.AsToken();
 
-        var handoff = await StartHandoffAsync(preview.Problem, preview.Plan, me.Name, me.Id, me.SlackUserId, "Web", expertId);
+        var plan = preview.Plan with { Urgency = EffectiveUrgency(preview.Plan.Urgency) };
+        var handoff = await StartHandoffAsync(preview.Problem, plan, me.Name, me.Id, me.SlackUserId, "Web", expertId);
+        _askPriority.Value = "Auto";
         _sentHandoffId.Value = handoff.Id;
         _preview.Value = null;
         _askDraft.Value = "";
@@ -171,10 +219,18 @@ public partial class EscalerApp
             return;
         }
 
+        var outside = _outside.Value is { } help && help.Problem == preview.Problem ? help : null;
+
         if (plan.Matches.Count == 0)
         {
-            view.EmptyState("Nobody fits this one yet", icon: "user-search",
-                description: "No one in the directory lists expertise that covers it. Add detail and search again, or invite the person who'd know to set up their profile.");
+            view.EmptyState("Nobody inside fits this one", icon: "user-search",
+                description: "No colleague lists expertise that covers it. Add detail and search again, or look outside below.");
+
+            if (outside is not null)
+            {
+                RenderOutsideHelp(view, me, outside, noInternalMatch: true);
+            }
+
             return;
         }
 
@@ -183,7 +239,7 @@ public partial class EscalerApp
             result.Row(["items-center gap-2 flex-wrap"], content: head =>
             {
                 head.Text([Text.H4, "font-heading"], text: plan.Summary);
-                UrgencyBadge(head, plan.Urgency);
+                UrgencyBadge(head, EffectiveUrgency(plan.Urgency));
             });
 
             var best = plan.Matches[0];
@@ -266,6 +322,11 @@ public partial class EscalerApp
                         });
                     }
                 });
+            }
+
+            if (outside is not null)
+            {
+                RenderOutsideHelp(result, me, outside, noInternalMatch: false);
             }
         });
     }

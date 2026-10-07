@@ -169,7 +169,7 @@ public partial class EscalerApp
             }
 
             var candidates = _experts.Values
-                .Where(e => e.Available && e.SlackUserId is not null && e.SlackUserId != slackUserId)
+                .Where(e => e.IsRoutable && e.SlackUserId is not null && e.SlackUserId != slackUserId)
                 .ToList();
 
             if (candidates.Count == 0)
@@ -214,6 +214,17 @@ public partial class EscalerApp
                 var backupText = backups > 0 ? $" {backups} backup{(backups == 1 ? "" : "s")} lined up if they can't." : "";
                 await SlackPostAsync(channel,
                     $":handshake: Asked *{Esc(expert.Name)}*, {Esc(expert.Title)}: _{Esc(handoff.AssigneeReason ?? "")}_\nI'll put you two in a group DM as soon as they accept.{backupText}",
+                    threadTs: threadTs);
+            }
+            else if (await MatchPartnersAsync(text) is { Count: > 0 } partners)
+            {
+                // No colleague fits: name the partners the company already uses, and leave contacting them to the person
+                var lines = partners
+                    .Select(m => FindExpert(m.ExpertId))
+                    .OfType<Expert>()
+                    .Select(p => $"• *{Esc(p.Company ?? p.Name)}*" + (p.Email is { Length: > 0 } mail ? $" ({Esc(mail)})" : "") + $": _{Esc(partners.First(m => m.ExpertId == p.Id).Reason)}_");
+                await SlackPostAsync(channel,
+                    $"Nobody inside lists expertise for this one. These external partners your company works with might:\n{string.Join("\n", lines)}\nEscaler doesn't contact them for you.",
                     threadTs: threadTs);
             }
             else
@@ -398,7 +409,7 @@ public partial class EscalerApp
             return null;
         }
 
-        var match = _experts.Values.FirstOrDefault(e => e.SlackUserId is null && string.Equals(e.Email, email, StringComparison.OrdinalIgnoreCase));
+        var match = _experts.Values.FirstOrDefault(e => !e.IsExternal && e.SlackUserId is null && string.Equals(e.Email, email, StringComparison.OrdinalIgnoreCase));
 
         if (match is not null)
         {

@@ -10,7 +10,7 @@ public partial class EscalerApp
 
     private IReadOnlyList<Expert> VisiblePeople()
     {
-        IEnumerable<Expert> rows = _experts.Values;
+        IEnumerable<Expert> rows = _experts.Values.Where(e => !e.IsExternal);
         var search = _peopleSearch.Value.Trim();
 
         if (search.Length > 0)
@@ -43,7 +43,7 @@ public partial class EscalerApp
 
     private void RenderPeople(UIView view, Expert me)
     {
-        var all = _experts.Values.ToList();
+        var all = _experts.Values.Where(e => !e.IsExternal).ToList();
         var demoCount = all.Count(e => e.IsDemo);
 
         view.Row(["items-end justify-between gap-4 flex-wrap"], content: head =>
@@ -113,6 +113,7 @@ public partial class EscalerApp
                     _peopleTeam.Value = "all";
                     _peopleAvailability.Value = "all";
                 }));
+            RenderPartners(view);
             return;
         }
 
@@ -140,6 +141,16 @@ public partial class EscalerApp
                         {
                             tags.Badge("Demo", size: BadgeSize.Sm, outline: true);
                         }
+
+                        if (person.IsManager)
+                        {
+                            tags.Badge("Manager", tone: SemanticTone.Info, size: BadgeSize.Sm);
+                        }
+
+                        if (person.IsDraft)
+                        {
+                            tags.Badge(person.Invited ? "From Slack · invited" : "From Slack · not confirmed", tone: SemanticTone.Warning, size: BadgeSize.Sm, outline: true);
+                        }
                     });
 
                     SkillChips(card, person.Skills, 5);
@@ -147,6 +158,22 @@ public partial class EscalerApp
                     if (person.About.Length > 0)
                     {
                         card.Text([Text.Caption, "text-muted-foreground line-clamp-2"], text: person.About);
+                    }
+
+                    // Admins decide who can post priorities; checked again inside the handler
+                    if (_isAdmin.Value && !person.IsDemo)
+                    {
+                        card.Button([Button.GhostSm, "self-start gap-1.5 -ml-2"], text: person.IsManager ? "Remove manager" : "Make manager", onClick: async () =>
+                        {
+                            if (_isAdmin.Value && FindExpert(person.Id) is { } current)
+                            {
+                                _experts[current.Id] = current with { IsManager = !current.IsManager };
+                            }
+                        }, content: b =>
+                        {
+                            b.Icon([Icon.Sm], name: person.IsManager ? "user-minus" : "user-check");
+                            b.Text(text: person.IsManager ? "Remove manager" : "Make manager");
+                        });
                     }
 
                     card.Row(["items-center justify-between gap-2 pt-3 border-t border-border mt-auto"], content: foot =>
@@ -173,5 +200,7 @@ public partial class EscalerApp
                 });
             }
         });
+
+        RenderPartners(view);
     }
 }

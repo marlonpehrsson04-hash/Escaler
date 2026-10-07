@@ -36,7 +36,12 @@ public partial class EscalerApp
                 || (FindExpert(h.AssigneeId)?.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false));
         }
 
-        return rows.OrderByDescending(h => h.CreatedAt).ToList();
+        // Open urgent work first, then newest
+        return rows
+            .OrderByDescending(h => h.IsOpen)
+            .ThenByDescending(h => h.Urgency switch { "High" => 2, "Normal" => 1, _ => 0 })
+            .ThenByDescending(h => h.CreatedAt)
+            .ToList();
     }
 
     private void RenderHandoffs(UIView view, Expert me)
