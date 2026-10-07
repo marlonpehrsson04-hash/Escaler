@@ -123,7 +123,7 @@ public partial class EscalerApp
     {
         AIException? last = null;
 
-        foreach (var model in new[] { WebSearcherModel.Google, WebSearcherModel.Bing, WebSearcherModel.Jina })
+        foreach (var model in new[] { WebSearcherModel.Google, WebSearcherModel.Bing, WebSearcherModel.Jina, WebSearcherModel.Spider })
         {
             try
             {
