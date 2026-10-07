@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/Config/">
+    <File Path="ikon-config.toml" />
+  </Folder>
+  <Folder Name="/App/">
+    <Project Path="app/Escaler/Escaler.csproj" />
+  </Folder>
+  <Folder Name="/Frontend/">
+    <Project Path="frontend-node/Escaler.Frontend.Node.csproj" />
+  </Folder>
+</Solution>
