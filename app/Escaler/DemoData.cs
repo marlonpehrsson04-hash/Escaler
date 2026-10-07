@@ -3,25 +3,16 @@
 // "Remove demo data" clears it in one go (with undo) and it never comes back after that.
 public partial class EscalerApp
 {
-    // Bump when the demo set grows, so existing installs that still show demo data get the new entries
-    private const int DemoVersion = 2;
-
-    private readonly PersistentReactive<int> _demoVersion = new(0, key: "escaler-demo-version");
-
     private sealed record DemoBackup(Expert[] Experts, Handoff[] Handoffs, PriorityTask[] Priorities, Handoff[] Reassigned);
 
     private readonly Reactive<DemoBackup?> _removedDemo = new(null);
 
     private static bool IsDemoId(string id) => id.StartsWith("demo-", StringComparison.Ordinal);
 
+    // Tops up a directory that still shows demo people with any demo entries it lacks. Once the demo people are
+    // removed there are none left, so nothing is added back; an empty directory gets the whole example company.
     private void SeedDemoData()
     {
-        if (_demoVersion.Value >= DemoVersion)
-        {
-            return;
-        }
-
-        // Only top up when demo data is still in use: a directory whose demo people were removed stays clean
         var demosInUse = _experts.Count == 0 || _experts.Values.Any(e => e.IsDemo);
 
         if (demosInUse)
@@ -41,8 +32,6 @@ public partial class EscalerApp
                 _priorities[priority.Id] = priority;
             }
         }
-
-        _demoVersion.Value = DemoVersion;
     }
 
     private int DemoCount() => _experts.Values.Count(e => e.IsDemo);
