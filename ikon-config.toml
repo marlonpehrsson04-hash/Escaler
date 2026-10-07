@@ -20,14 +20,14 @@ StopSessions = true
 # one shared anonymous user on one shared app instance (cheap for public landing pages; scale out
 # with [Sharded] on the SessionIdentity record; detect with Context.IsGlobal). List both to enter as
 # "global" and upgrade a visitor to "guest" on demand. Signing in upgrades either to the account.
-Methods = ["google", "apple", "microsoft", "signicat", "email", "passkey", "guest"]
+Methods = ["google", "microsoft", "email", "passkey"]
 # If non-empty, only emails from these domains may sign in (e.g. ["mycompany.com"])
 DomainAllowlist = []
 # false: visitors enter anonymously and sign in on demand (branch on Context.IsAnonymous, prompt with
 # ClientFunctions.LoginAsync("google")). true: a sign-in wall before the app loads, with a "Continue
 # as guest" button when Methods lists "guest" or "global"; with neither listed, no route is
 # prerendered to crawlable HTML.
-RequireSignIn = false
+RequireSignIn = true
 
 # The platform's feedback sheet: report a problem or an idea by text, voice, files and screenshot.
 # Reports go to the app's space ('ikon issue list --source person', Studio). Open it from the app's
